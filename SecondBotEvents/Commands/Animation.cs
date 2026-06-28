@@ -74,5 +74,41 @@ namespace SecondBotEvents.Commands
             return BasicReply("Accepted - "+animations.Count.ToString()+" stopped animations");
         }
 
+        [About("Starts playing a body animation using its inventory item UUID")]
+        [ReturnHints("Accepted")]
+        [ReturnHintsFailure("Error with animation uuid")]
+        [ReturnHintsFailure("unable to get animation from inventory")]
+        [ArgHints("animation", "inventory uuid of the animation to play", "UUID")]
+        [CmdTypeDo()]
+        public object AnimationStart(string animation)
+        {
+            if (UUID.TryParse(animation, out UUID animUUID) == false)
+            {
+                return BasicReply("Error with animation uuid", [animation]);
+            }
+            InventoryItem itm = GetClient().Inventory.FetchItem(animUUID, GetClient().Self.AgentID, TimeSpan.FromSeconds(15));
+            if (itm == null)
+            {
+                return BasicReply("unable to get animation from inventory", [animation]);
+            }
+            GetClient().Self.AnimationStart(itm.AssetUUID, true);
+            return BasicReply("Accepted", [animation]);
+        }
+
+        [About("Stops playing a body animation using its asset UUID")]
+        [ReturnHints("Accepted")]
+        [ReturnHintsFailure("Error with animation asset uuid")]
+        [ArgHints("animation", "asset uuid of the animation to stop", "UUID")]
+        [CmdTypeDo()]
+        public object AnimationStop(string animation)
+        {
+            if (UUID.TryParse(animation, out UUID animUUID) == false)
+            {
+                return BasicReply("Error with animation asset uuid", [animation]);
+            }
+            GetClient().Self.AnimationStop(animUUID, true);
+            return BasicReply("Accepted", [animation]);
+        }
+
     }
 }
