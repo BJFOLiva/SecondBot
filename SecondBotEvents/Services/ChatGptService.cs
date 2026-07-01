@@ -553,7 +553,8 @@ namespace SecondBotEvents.Services
                     "friends_list, groups, parcel_id, parcel_uuid, parcel_size, parcel_traffic, parcel_description, parcel_flags, " +
                     "stand, autopilot_stop, reset_animations, animation_start, animation_stop, inventory_folders, inventory_contents, request_teleport. " +
                     "Use request_teleport with empty args when the owner asks you to come to them. Animation commands require args.animation containing an inventory animation UUID. " +
-                    "Use inventory_folders and then inventory_contents to discover real animations. Never claim an action happened unless its tool succeeded; never invent inventory or UUIDs."));
+                    "inventory_contents requires args.folder set to a folder name (e.g. \"Animations\") or UUID; the dashboard resolves names automatically, so you do NOT need to call inventory_folders first unless the owner explicitly asks to list folders. " +
+                    "Never claim an action happened unless its tool succeeded; never invent inventory or UUIDs."));
             }
             if(messages.Count == 0)
             {
