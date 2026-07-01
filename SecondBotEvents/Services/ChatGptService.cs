@@ -604,22 +604,16 @@ namespace SecondBotEvents.Services
                     });
                 }
                 ChatCompletionCreateResponse completionResult = null;
-                if (myConfig.GetProvider() != "openai")
+                ChatCompletionCreateRequest initialRequest = new()
                 {
-                    completionResult = await openAiService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
-                    {
-                        Messages = messages,
-                        Model = myConfig.GetUseModel(),
-                    });
-                }
-                else
+                    Messages = messages,
+                    Model = myConfig.GetProvider() != "openai" ? myConfig.GetUseModel() : OpenAIModels.GetModel(myConfig.GetUseModel())
+                };
+                for (int attempt = 1; attempt <= 2; attempt++)
                 {
-                    completionResult = await openAiService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
-                    {
-                        Messages = messages,
-                        Model = OpenAIModels.GetModel(myConfig.GetUseModel())
-                    });
-
+                    completionResult = await openAiService.ChatCompletion.CreateCompletion(initialRequest);
+                    if (completionResult != null && completionResult.Successful) break;
+                    if (attempt < 2) await Task.Delay(TimeSpan.FromSeconds(2));
                 }
                 if (completionResult == null)
                 {
@@ -632,8 +626,9 @@ namespace SecondBotEvents.Services
                 }
                 else
                 {
-                    if (myConfig.GetShowDebug()) LogFormater.Warn("Initial AI completion failed: " + JsonSerializer.Serialize(completionResult));
-                    GetClient().Self.InstantMessage(replyTo, "The AI provider rejected that request. Please try again in a moment.");
+                    string providerError = DescribeProviderFailure(completionResult);
+                    if (myConfig.GetShowDebug()) LogFormater.Warn("Initial AI completion failed: " + providerError);
+                    GetClient().Self.InstantMessage(replyTo, "The AI provider rejected that request: " + providerError);
                     return;
                 }
                 int toolDepth = 0;
@@ -778,6 +773,43 @@ namespace SecondBotEvents.Services
             }
             catch (JsonException) { }
             return false;
+        }
+
+        protected static string DescribeProviderFailure(ChatCompletionCreateResponse response)
+        {
+            try
+            {
+                using JsonDocument json = JsonDocument.Parse(JsonSerializer.Serialize(response));
+                string message = FindProviderError(json.RootElement);
+                if (!string.IsNullOrWhiteSpace(message))
+                    return message.Length > 500 ? message[..500] : message;
+            }
+            catch (Exception) { }
+            return "unknown provider error";
+        }
+
+        protected static string FindProviderError(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    if (property.Name.Equals("message", StringComparison.OrdinalIgnoreCase)
+                        && property.Value.ValueKind == JsonValueKind.String)
+                        return property.Value.GetString() ?? "";
+                    string nested = FindProviderError(property.Value);
+                    if (nested != "") return nested;
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement child in element.EnumerateArray())
+                {
+                    string nested = FindProviderError(child);
+                    if (nested != "") return nested;
+                }
+            }
+            return "";
         }
 
         protected static string BuildToolFallback(string toolKey, string result)
