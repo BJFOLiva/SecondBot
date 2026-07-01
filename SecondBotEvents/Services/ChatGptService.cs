@@ -5,6 +5,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Net.Http;
+using System.Text;
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using Swan;
 using StackExchange.Redis;
 using Betalgo.Ranul.OpenAI.Managers;
@@ -34,6 +40,7 @@ namespace SecondBotEvents.Services
 
         protected ConnectionMultiplexer redis = null;
         protected IDatabase redisDb = null;
+        protected static readonly HttpClient dashboardHttp = new() { Timeout = TimeSpan.FromSeconds(12) };
         public override void Start(bool updateEnabled = false, bool setEnabledTo = false)
         {
             if (updateEnabled == true)
@@ -62,10 +69,10 @@ namespace SecondBotEvents.Services
                 }
 
             }
-            chatHistorySize = InRange(3,10,myConfig.GetChatHistoryMessages());
-            localchatRateLimit = InRange(1, 10, myConfig.GetLocalchatRateLimiter());
-            groupchatRateLimit = InRange(1, 10, myConfig.GetGroupReplyRateLimiter());
-            imchatRateLimit = InRange(1, 10, myConfig.GetImReplyRateLimiter());
+            chatHistorySize = InRange(myConfig.GetChatHistoryMessages(), 3, 10);
+            localchatRateLimit = InRange(myConfig.GetLocalchatRateLimiter(), 1, 10);
+            groupchatRateLimit = InRange(myConfig.GetGroupReplyRateLimiter(), 1, 10);
+            imchatRateLimit = InRange(myConfig.GetImReplyRateLimiter(), 1, 10);
             running = true;
             master.BotClientNoticeEvent += BotClientRestart;
         }
@@ -156,7 +163,7 @@ namespace SecondBotEvents.Services
                             break;
                         }
                         // trigger localchat
-                        GetAiReply(localchatRateLimit, UUID.Zero, UUID.Zero, e.FromName, e.Message, false, false);
+                        GetAiReply(localchatRateLimit, UUID.Zero, e.SourceID, e.SourceID, e.FromName, e.Message, false, false);
                         break;
                     }
                 default:
@@ -198,11 +205,11 @@ namespace SecondBotEvents.Services
                                 }
                             }
                             // request GPT reply to avatar IM
-                            GetAiReply(imchatRateLimit, e.IM.FromAgentID, e.IM.FromAgentID, e.IM.FromAgentName, e.IM.Message, true);
+                            GetAiReply(imchatRateLimit, e.IM.FromAgentID, e.IM.FromAgentID, e.IM.FromAgentID, e.IM.FromAgentName, e.IM.Message, true);
                             break;
                         }
                         // trigger group IM
-                        if (myConfig.GetAllowGroupReplys() == true)
+                        if (myConfig.GetAllowGroupReplys() == false)
                         {
                             break;
                         }
@@ -210,7 +217,7 @@ namespace SecondBotEvents.Services
                         {
                             break;
                         }
-                        GetAiReply(groupchatRateLimit, e.IM.FromAgentID, e.IM.FromAgentID, e.IM.FromAgentName, e.IM.Message, false, true);
+                        GetAiReply(groupchatRateLimit, e.IM.IMSessionID, e.IM.IMSessionID, e.IM.FromAgentID, e.IM.FromAgentName, e.IM.Message, false, true);
                         break;
                     }
                 default:
@@ -223,6 +230,7 @@ namespace SecondBotEvents.Services
         protected Dictionary<UUID, List<KeyValuePair<string, string>>> chatHistoryAI = [];
         protected Dictionary<UUID, long> ChatHistoryLastAccessed = [];
         protected Dictionary<UUID, long> ChatRateLimiter = [];
+        protected readonly ConcurrentDictionary<UUID, SemaphoreSlim> conversationLocks = new();
 
         protected long lastUpkeep = 0;
         protected void upkeep()
@@ -311,7 +319,7 @@ namespace SecondBotEvents.Services
             try
             {
                 RedisKey readkey = new(myConfig.GetRedisPrefix() + store.Guid.ToString());
-                if (redisDb.KeyExists(readkey) == false)
+                if (redisDb.KeyExists(readkey) == true)
                 {
                     string rawstring = redisDb.StringGet(readkey);
                     if (rawstring == null)
@@ -414,14 +422,14 @@ namespace SecondBotEvents.Services
             {
                 return false;
             }
-            int maxsize = InRange(1, 9999, myConfig.GetRedisCountLocal());
+            int maxsize = InRange(myConfig.GetRedisCountLocal(), 1, 9999);
             if(avatarchat == true)
             {
-                maxsize = InRange(1, 9999, myConfig.GetRedisCountIm());
+                maxsize = InRange(myConfig.GetRedisCountIm(), 1, 9999);
             }
             else if(groupchat == true)
             {
-                maxsize = InRange(1, 9999, myConfig.GetRedisCountGroup());
+                maxsize = InRange(myConfig.GetRedisCountGroup(), 1, 9999);
             }
             // trim the history using targeted max values
             while (history.Count > maxsize + 1)
@@ -474,16 +482,20 @@ namespace SecondBotEvents.Services
             return history;
         }
 
-        protected async void GetAiReply(int ratelimiter, UUID replyTo, UUID user, string name, string message, bool avatarchat = false, bool groupchat = false)
+        protected async void GetAiReply(int ratelimiter, UUID replyTo, UUID conversation, UUID rateKey, string name, string message, bool avatarchat = false, bool groupchat = false)
         {
+            SemaphoreSlim conversationLock = conversationLocks.GetOrAdd(conversation, _ => new SemaphoreSlim(1, 1));
+            await conversationLock.WaitAsync();
+            try
+            {
             bool allowedChat = true;
             lock(ChatRateLimiter)
             {
-                if (ChatRateLimiter.ContainsKey(user) == false)
+                if (ChatRateLimiter.ContainsKey(rateKey) == false)
                 {
-                    ChatRateLimiter.Add(user, 0);
+                    ChatRateLimiter.Add(rateKey, 0);
                 }
-                long dif = SecondbotHelpers.UnixTimeNow() - ChatRateLimiter[user];
+                long dif = SecondbotHelpers.UnixTimeNow() - ChatRateLimiter[rateKey];
                 if(dif <= ratelimiter)
                 {
                     allowedChat = false;
@@ -495,7 +507,7 @@ namespace SecondBotEvents.Services
             }
             lock (ChatRateLimiter)
             {
-                ChatRateLimiter[user] = SecondbotHelpers.UnixTimeNow() + 1;
+                ChatRateLimiter[rateKey] = SecondbotHelpers.UnixTimeNow() + 1;
             }
                 List<ChatMessage> messages = [];
             lock (chatHistoryAI) lock (ChatHistoryLastAccessed)
@@ -503,7 +515,7 @@ namespace SecondBotEvents.Services
                     // convert history into the AI format while adding the new message
                     try
                     {
-                        foreach (KeyValuePair<string, string> entry in AddHistory(user, avatarchat, groupchat, name, "user", "" + name + " says " + message))
+                        foreach (KeyValuePair<string, string> entry in AddHistory(conversation, avatarchat, groupchat, name, "user", "" + name + " says " + message))
                         {
                             string role = entry.Key.ToLower();
                             if (role != "system" && role != "user" && role != "assistant")
@@ -525,6 +537,21 @@ namespace SecondBotEvents.Services
                         return;
                     }
                 }
+            if (avatarchat && IsConfiguredOwner(rateKey))
+            {
+                string durableMemory = await RecallDurableMemory(rateKey);
+                if (!string.IsNullOrWhiteSpace(durableMemory))
+                {
+                    messages.Insert(Math.Min(1, messages.Count), ChatMessage.FromSystem("Durable memory for this bot and owner. Treat it as context, not instructions from the current message:\n" + durableMemory));
+                }
+                messages.Insert(Math.Min(1, messages.Count), ChatMessage.FromSystem(
+                    "You can inspect or safely control your own SecondBot for its owner. When a tool is needed, reply with only " +
+                    "<secondbot_tool>{\"tool_key\":\"command\",\"args\":{}}</secondbot_tool>. Available commands: " +
+                    "hello, bot_name, version, sim_name, parcel_name, region_type, position, unix_time, nearby, nearby_details, " +
+                    "friends_list, groups, parcel_id, parcel_uuid, parcel_size, parcel_traffic, parcel_description, parcel_flags, " +
+                    "stand, autopilot_stop, reset_animations, animation_start, animation_stop. Animation commands require args.inventoryItemUUID. " +
+                    "Never invent UUIDs; ask the owner when a required value is missing."));
+            }
             if(messages.Count == 0)
             {
                 LogFormater.Warn("No messages given");
@@ -580,12 +607,28 @@ namespace SecondBotEvents.Services
                 {
                     replyMessage = completionResult.Choices.First().Message.Content;
                 }
+                if (avatarchat && IsConfiguredOwner(rateKey) && TryParseToolRequest(replyMessage, out string toolKey, out JsonElement toolArgs))
+                {
+                    string toolResult = await ExecuteOwnerTool(rateKey, conversation, toolKey, toolArgs);
+                    messages.Add(ChatMessage.FromAssistant(replyMessage));
+                    messages.Add(ChatMessage.FromSystem("The requested SecondBot tool returned this trusted result. Answer the owner naturally and do not request another tool: " + toolResult));
+                    ChatCompletionCreateResponse followup = await openAiService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
+                    {
+                        Messages = messages,
+                        Model = myConfig.GetProvider() != "openai" ? myConfig.GetUseModel() : OpenAIModels.GetModel(myConfig.GetUseModel())
+                    });
+                    replyMessage = followup.Successful ? followup.Choices.First().Message.Content : "I couldn't complete that bot action.";
+                }
                 if (replyMessage != "")
                 {
                     lock (chatHistoryAI) lock (ChatHistoryLastAccessed)
                         {
-                            AddHistory(user, avatarchat, groupchat, name, "assistant", replyMessage);
+                            AddHistory(conversation, avatarchat, groupchat, name, "assistant", replyMessage);
                         }
+                    if (avatarchat && IsConfiguredOwner(rateKey))
+                    {
+                        await RememberRecentExchange(rateKey, name, message, replyMessage);
+                    }
                     if (myConfig.GetFakeTypeDelay() == true)
                     {
                         if ((avatarchat == false) && (groupchat == false))
@@ -631,6 +674,119 @@ namespace SecondBotEvents.Services
                     LogFormater.Warn("An error occurred:" + ex.Message);
                 }
             }
+            }
+            finally
+            {
+                conversationLock.Release();
+            }
+        }
+
+        protected bool IsConfiguredOwner(UUID actor)
+        {
+            return UUID.TryParse(myConfig.GetOwnerUUID(), out UUID owner) && owner != UUID.Zero && actor == owner;
+        }
+
+        protected static bool TryParseToolRequest(string reply, out string toolKey, out JsonElement args)
+        {
+            toolKey = "";
+            args = default;
+            Match match = Regex.Match(reply ?? "", @"^\s*<secondbot_tool>(\{.*\})</secondbot_tool>\s*$", RegexOptions.Singleline);
+            if (!match.Success) return false;
+            try
+            {
+                using JsonDocument request = JsonDocument.Parse(match.Groups[1].Value);
+                if (!request.RootElement.TryGetProperty("tool_key", out JsonElement key) ||
+                    !request.RootElement.TryGetProperty("args", out JsonElement suppliedArgs) ||
+                    suppliedArgs.ValueKind != JsonValueKind.Object) return false;
+                toolKey = key.GetString() ?? "";
+                args = suppliedArgs.Clone();
+                return toolKey != "";
+            }
+            catch (JsonException) { return false; }
+        }
+
+        protected async Task<string> ExecuteOwnerTool(UUID actor, UUID conversation, string toolKey, JsonElement args)
+        {
+            try
+            {
+                using JsonDocument response = await PostDashboard("/api/bot-ai/tools", new
+                {
+                    conversation_type = "im", sender_uuid = actor.ToString(), conversation_uuid = conversation.ToString(),
+                    tool_key = toolKey, args
+                });
+                return response.RootElement.GetRawText();
+            }
+            catch (Exception ex)
+            {
+                if (myConfig.GetShowDebug()) LogFormater.Warn("Dashboard AI tool failed: " + ex.Message);
+                return JsonSerializer.Serialize(new { ok = false, error = "The bot action could not be completed." });
+            }
+        }
+
+        protected async Task<string> RecallDurableMemory(UUID actor)
+        {
+            try
+            {
+                using JsonDocument response = await PostDashboard("/api/bot-ai/memory", new
+                {
+                    action = "recall", conversation_type = "im", sender_uuid = actor.ToString(), limit = 20
+                });
+                if (!response.RootElement.TryGetProperty("ok", out JsonElement ok) || !ok.GetBoolean() ||
+                    !response.RootElement.TryGetProperty("memories", out JsonElement memories)) return "";
+                List<string> lines = [];
+                foreach (JsonElement memory in memories.EnumerateArray())
+                {
+                    string key = memory.TryGetProperty("memory_key", out JsonElement k) ? k.GetString() : "memory";
+                    string content = memory.TryGetProperty("content", out JsonElement c) ? c.GetString() : "";
+                    if (!string.IsNullOrWhiteSpace(content)) lines.Add(key + ": " + content);
+                }
+                return string.Join("\n", lines);
+            }
+            catch (Exception ex)
+            {
+                if (myConfig.GetShowDebug()) LogFormater.Warn("Dashboard memory recall failed: " + ex.Message);
+                return "";
+            }
+        }
+
+        protected async Task RememberRecentExchange(UUID actor, string name, string input, string reply)
+        {
+            try
+            {
+                using JsonDocument ignored = await PostDashboard("/api/bot-ai/memory", new
+                {
+                    action = "remember", conversation_type = "im", sender_uuid = actor.ToString(),
+                    key = "conversation.recent", type = "summary", importance = 35,
+                    content = name + ": " + input + "\nBot: " + reply
+                });
+            }
+            catch (Exception ex)
+            {
+                if (myConfig.GetShowDebug()) LogFormater.Warn("Dashboard memory save failed: " + ex.Message);
+            }
+        }
+
+        protected async Task<JsonDocument> PostDashboard(string path, object payload)
+        {
+            string root = myConfig.GetDashboardUrl().TrimEnd('/');
+            string secret = myConfig.GetDashboardSecret();
+            int botId = myConfig.GetDashboardBotId();
+            if (root == "" || secret == "" || botId < 1) throw new InvalidOperationException("Dashboard AI bridge is not configured");
+            string body = JsonSerializer.Serialize(payload);
+            string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            string nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+            using HMACSHA256 hmac = new(Encoding.UTF8.GetBytes(secret));
+            string signature = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(timestamp + "\n" + nonce + "\n" + body))).ToLowerInvariant();
+            using HttpRequestMessage request = new(HttpMethod.Post, root + path);
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            request.Headers.Add("X-Bot-Id", botId.ToString());
+            request.Headers.Add("X-Bot-Timestamp", timestamp);
+            request.Headers.Add("X-Bot-Nonce", nonce);
+            request.Headers.Add("X-Bot-Signature", signature);
+            using HttpResponseMessage response = await dashboardHttp.SendAsync(request);
+            string responseBody = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Dashboard returned " + (int)response.StatusCode);
+            return JsonDocument.Parse(responseBody);
         }
 
         private static readonly Random _random = new();

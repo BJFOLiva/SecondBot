@@ -39,7 +39,16 @@ namespace SecondBotEvents.Config
             settings.Add("RedisCountLocal");
             settings.Add("RedisCountGroup");
             settings.Add("RedisCountIm");
+            settings.Add("DashboardUrl");
+            settings.Add("DashboardBotId");
+            settings.Add("DashboardSecret");
+            settings.Add("OwnerUUID");
         }
+
+        public string GetDashboardUrl() { return ReadSettingAsString("DashboardUrl", ""); }
+        public int GetDashboardBotId() { return ReadSettingAsInt("DashboardBotId", 0); }
+        public string GetDashboardSecret() { return ReadSettingAsString("DashboardSecret", ""); }
+        public string GetOwnerUUID() { return ReadSettingAsString("OwnerUUID", ""); }
 
         public bool GetFakeTypeDelay()
         {
