@@ -552,8 +552,9 @@ namespace SecondBotEvents.Services
                     "hello, bot_name, version, sim_name, parcel_name, region_type, position, unix_time, nearby, nearby_details, " +
                     "friends_list, groups, parcel_id, parcel_uuid, parcel_size, parcel_traffic, parcel_description, parcel_flags, " +
                     "stand, autopilot_stop, reset_animations, animation_start, animation_stop, inventory_folders, inventory_contents, request_teleport. " +
-                    "Use request_teleport with empty args when the owner asks you to come to them. Animation commands require args.animation containing an inventory animation UUID. " +
-                    "inventory_contents requires args.folder set to a folder name (e.g. \"Animations\") or UUID; the dashboard resolves names automatically, so you do NOT need to call inventory_folders first unless the owner explicitly asks to list folders. " +
+                    "Use request_teleport with empty args when the owner asks you to come to them. " +
+                    "inventory_contents requires args.folder set to a folder name (e.g. \"Animations\") or UUID; the dashboard resolves names automatically. " +
+                    "animation_start and animation_stop accept args.animation as the animation name (e.g. \"Kneel\") or UUID; the dashboard resolves names from the Animations folder automatically. " +
                     "Never claim an action happened unless its tool succeeded; never invent inventory or UUIDs."));
             }
             if(messages.Count == 0)
