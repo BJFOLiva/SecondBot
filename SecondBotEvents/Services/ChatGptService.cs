@@ -629,13 +629,27 @@ namespace SecondBotEvents.Services
                     string toolResult = await ExecuteOwnerTool(rateKey, conversation, toolKey, toolArgs);
                     messages.Add(ChatMessage.FromAssistant(replyMessage));
                     toolDepth++;
-                    messages.Add(ChatMessage.FromSystem("The requested SecondBot tool returned this trusted result. Use only this result as fact. You may request another available tool if needed; otherwise answer the owner naturally: " + toolResult));
+                    if (TryGetToolError(toolResult, out string toolError))
+                    {
+                        replyMessage = "I couldn't complete that bot action: " + toolError;
+                        break;
+                    }
+                    string modelToolResult = toolResult.Length > 16000 ? toolResult[..16000] + "…[truncated]" : toolResult;
+                    messages.Add(ChatMessage.FromSystem("The requested SecondBot tool returned this trusted result. Use only this result as fact. You may request another available tool if needed; otherwise answer the owner naturally: " + modelToolResult));
                     ChatCompletionCreateResponse followup = await openAiService.ChatCompletion.CreateCompletion(new ChatCompletionCreateRequest
                     {
                         Messages = messages,
                         Model = myConfig.GetProvider() != "openai" ? myConfig.GetUseModel() : OpenAIModels.GetModel(myConfig.GetUseModel())
                     });
-                    replyMessage = followup.Successful ? followup.Choices.First().Message.Content : "I couldn't complete that bot action.";
+                    if (followup.Successful)
+                    {
+                        replyMessage = followup.Choices.First().Message.Content;
+                    }
+                    else
+                    {
+                        if (myConfig.GetShowDebug()) LogFormater.Warn("AI follow-up failed after tool " + toolKey);
+                        replyMessage = BuildToolFallback(toolKey, toolResult);
+                    }
                 }
                 if ((replyMessage ?? "").Contains("<secondbot_tool>", StringComparison.OrdinalIgnoreCase))
                 {
@@ -725,6 +739,53 @@ namespace SecondBotEvents.Services
                 return toolKey != "";
             }
             catch (JsonException) { return false; }
+        }
+
+        protected static bool TryGetToolError(string result, out string error)
+        {
+            error = "";
+            try
+            {
+                using JsonDocument json = JsonDocument.Parse(result);
+                if (json.RootElement.TryGetProperty("ok", out JsonElement ok) && !ok.GetBoolean())
+                {
+                    error = json.RootElement.TryGetProperty("error", out JsonElement detail)
+                        ? detail.GetString() ?? "Unknown dashboard error."
+                        : "Unknown dashboard error.";
+                    return true;
+                }
+            }
+            catch (JsonException) { }
+            return false;
+        }
+
+        protected static string BuildToolFallback(string toolKey, string result)
+        {
+            try
+            {
+                using JsonDocument json = JsonDocument.Parse(result);
+                JsonElement root = json.RootElement;
+                if (toolKey == "inventory_contents" && root.TryGetProperty("result", out JsonElement commandResult)
+                    && commandResult.TryGetProperty("reply", out JsonElement items) && items.ValueKind == JsonValueKind.Array)
+                {
+                    List<string> names = [];
+                    foreach (JsonElement item in items.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("name", out JsonElement name) && !string.IsNullOrWhiteSpace(name.GetString()))
+                            names.Add(name.GetString());
+                    }
+                    if (names.Count == 0) return "That inventory folder is empty.";
+                    string shown = string.Join(", ", names.Take(60));
+                    return "I found " + names.Count + " item" + (names.Count == 1 ? "" : "s") + ": " + shown
+                        + (names.Count > 60 ? ". There are " + (names.Count - 60) + " more." : ".");
+                }
+                string compact = result.Length > 900 ? result[..900] + "…" : result;
+                return "The bot action completed successfully. Result: " + compact;
+            }
+            catch (JsonException)
+            {
+                return "The bot action completed, but its result could not be formatted: " + (result.Length > 500 ? result[..500] + "…" : result);
+            }
         }
 
         protected async Task<string> ExecuteOwnerTool(UUID actor, UUID conversation, string toolKey, JsonElement args)
