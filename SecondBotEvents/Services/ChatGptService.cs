@@ -487,7 +487,13 @@ namespace SecondBotEvents.Services
         protected async void GetAiReply(int ratelimiter, UUID replyTo, UUID conversation, UUID rateKey, string name, string message, bool avatarchat = false, bool groupchat = false)
         {
             SemaphoreSlim conversationLock = conversationLocks.GetOrAdd(conversation, _ => new SemaphoreSlim(1, 1));
-            await conversationLock.WaitAsync();
+            if (!await conversationLock.WaitAsync(0))
+            {
+                if (avatarchat && IsConfiguredOwner(rateKey))
+                    GetClient().Self.InstantMessage(replyTo, "I'm still working on your previous request. I'll message you when it finishes.");
+                return;
+            }
+            bool progressSent = false;
             try
             {
             bool allowedChat = true;
@@ -510,6 +516,13 @@ namespace SecondBotEvents.Services
             lock (ChatRateLimiter)
             {
                 ChatRateLimiter[rateKey] = SecondbotHelpers.UnixTimeNow() + 1;
+            }
+            if (avatarchat && IsConfiguredOwner(rateKey)
+                && (message.Contains("inventory", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("animation", StringComparison.OrdinalIgnoreCase)))
+            {
+                GetClient().Self.InstantMessage(replyTo, "I'm checking my inventory now. I'll message you again when I have the result.");
+                progressSent = true;
             }
                 List<ChatMessage> messages = [];
             lock (chatHistoryAI) lock (ChatHistoryLastAccessed)
@@ -536,6 +549,7 @@ namespace SecondBotEvents.Services
                         {
                             LogFormater.Warn("error building AI request:" + ex.Message);
                         }
+                        if (avatarchat) GetClient().Self.InstantMessage(replyTo, "I couldn't prepare that AI request: " + ex.Message);
                         return;
                     }
                 }
@@ -609,16 +623,23 @@ namespace SecondBotEvents.Services
                 }
                 if (completionResult == null)
                 {
+                    if (avatarchat) GetClient().Self.InstantMessage(replyTo, "The AI provider returned no response. Please try again.");
                     return;
                 }
                 if (completionResult.Successful)
                 {
                     replyMessage = completionResult.Choices.First().Message.Content;
                 }
+                else
+                {
+                    if (myConfig.GetShowDebug()) LogFormater.Warn("Initial AI completion failed: " + JsonSerializer.Serialize(completionResult));
+                    GetClient().Self.InstantMessage(replyTo, "The AI provider rejected that request. Please try again in a moment.");
+                    return;
+                }
                 int toolDepth = 0;
                 while (avatarchat && IsConfiguredOwner(rateKey) && toolDepth < 3 && TryParseToolRequest(replyMessage, out string toolKey, out JsonElement toolArgs))
                 {
-                    if (toolDepth == 0)
+                    if (toolDepth == 0 && !progressSent)
                     {
                         string progress = toolKey.StartsWith("inventory_", StringComparison.OrdinalIgnoreCase)
                             || toolKey.StartsWith("animation_", StringComparison.OrdinalIgnoreCase)
