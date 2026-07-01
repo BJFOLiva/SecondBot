@@ -555,6 +555,7 @@ namespace SecondBotEvents.Services
                     "Use request_teleport with empty args when the owner asks you to come to them. " +
                     "inventory_contents requires args.folder set to a folder name (e.g. \"Animations\") or UUID; the dashboard resolves names automatically. " +
                     "animation_start and animation_stop accept args.animation as the animation name (e.g. \"Kneel\") or UUID; the dashboard resolves names from the Animations folder automatically. " +
+                    "dialog_response accepts args.dialogid (integer) and args.buttontext (the button label to click, e.g. \"Yes\"); use this when the owner asks you to accept or respond to a script dialog you have relayed to them. " +
                     "Never claim an action happened unless its tool succeeded; never invent inventory or UUIDs."));
             }
             if(messages.Count == 0)

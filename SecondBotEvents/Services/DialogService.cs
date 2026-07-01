@@ -191,6 +191,7 @@ namespace SecondBotEvents.Services
                     expires = expiresAt
                 };
                 string eventMessage = JsonSerializer.Serialize(window, JsonOptions.UnsafeRelaxed);
+                string readableMessage = $"[Script dialog from '{e.ObjectName}']\n{e.Message}\nButtons: {string.Join(" | ", e.ButtonLabels)}\nDialog ID: {windowid}";
                 foreach(int a in DialogRelayChannels)
                 {
                     if(a >= 0)
@@ -200,7 +201,7 @@ namespace SecondBotEvents.Services
                 }
                 foreach(UUID av in DialogRelayAvatars)
                 {
-                    GetClient().Self.InstantMessage(av, eventMessage);
+                    GetClient().Self.InstantMessage(av, readableMessage);
                 }
                 foreach(string url in DialogRelayHTTP)
                 {
