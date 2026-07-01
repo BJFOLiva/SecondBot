@@ -731,7 +731,7 @@ namespace SecondBotEvents.Services
             catch (Exception ex)
             {
                 if (myConfig.GetShowDebug()) LogFormater.Warn("Dashboard AI tool failed: " + ex.Message);
-                return JsonSerializer.Serialize(new { ok = false, error = "The bot action could not be completed." });
+                return JsonSerializer.Serialize(new { ok = false, error = ex.Message });
             }
         }
 
@@ -797,7 +797,22 @@ namespace SecondBotEvents.Services
             request.Headers.Add("X-Bot-Signature", signature);
             using HttpResponseMessage response = await dashboardHttp.SendAsync(request);
             string responseBody = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode) throw new InvalidOperationException("Dashboard returned " + (int)response.StatusCode);
+            if (!response.IsSuccessStatusCode)
+            {
+                string detail = "Dashboard returned HTTP " + (int)response.StatusCode;
+                try
+                {
+                    using JsonDocument errorBody = JsonDocument.Parse(responseBody);
+                    if (errorBody.RootElement.TryGetProperty("error", out JsonElement error))
+                    {
+                        string reported = (error.GetString() ?? "").Trim();
+                        if (reported.Length > 500) reported = reported[..500];
+                        if (reported != "") detail += ": " + reported;
+                    }
+                }
+                catch (JsonException) { }
+                throw new InvalidOperationException(detail);
+            }
             return JsonDocument.Parse(responseBody);
         }
 
