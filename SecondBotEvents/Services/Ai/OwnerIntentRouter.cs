@@ -53,8 +53,14 @@ namespace SecondBotEvents.Services.Ai
         {
             context ??= new OwnerIntentContext();
             string message = Normalize(input);
-            if (message.Length == 0 || message.Length > 500 || IsUnsafeToGuess(message))
+            if (message.Length == 0 || message.Length > 500)
                 return OwnerIntentResult.NoMatch();
+            if (IsUnsafeToGuess(message))
+            {
+                if (Regex.IsMatch(message, @"\b(?:inventory|inventories|animations?)\b", Options))
+                    return OwnerIntentResult.Clarify("Please ask for one inventory or animation action at a time.");
+                return OwnerIntentResult.NoMatch();
+            }
 
             if (IsMatch(message, @"^(?:what(?:'s| is) my uuid|tell me my uuid|my uuid)$"))
                 return OwnerIntentResult.Reply("Your verified owner UUID is {owner_uuid}.");
@@ -139,6 +145,20 @@ namespace SecondBotEvents.Services.Ai
             }
             if (IsMatch(message, @"^(?:accept|approve|decline|reject|cancel) (?:the )?dialog(?: (?:id )?[1-9][0-9]*)?$"))
                 return OwnerIntentResult.Clarify("Tell me the dialog ID and exact button label, for example: click Yes on dialog 3.");
+
+            // Never spend provider tokens merely to interpret inventory wording.
+            // Ambiguous owner requests are clarified locally instead.
+            if (Regex.IsMatch(message, @"\b(?:delete|remove|purge|destroy)\b", Options)
+                && Regex.IsMatch(message, @"\b(?:inventory|folder|item)\b", Options))
+                return OwnerIntentResult.Clarify("Destructive inventory actions are not available through conversational AI.");
+            if (Regex.IsMatch(message, @"\b(?:inventory|inventories)\b", Options))
+            {
+                if (Regex.IsMatch(message, @"\banimations?\b", Options))
+                    return InventoryContents("Animations");
+                return OwnerIntentResult.Clarify("Which inventory folder should I check? For example: list my Animations folder.");
+            }
+            if (Regex.IsMatch(message, @"\banimations?\b", Options))
+                return OwnerIntentResult.Clarify("Should I list the Animations folder, play an animation, stop one, or reset all animations?");
 
             return OwnerIntentResult.NoMatch();
         }

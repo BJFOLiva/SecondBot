@@ -14,6 +14,8 @@ Case[] cases =
     new("tell me what's inside your animations folder", OwnerIntentDisposition.Match, "inventory_contents", "folder", "Animations"),
     new("list Objects folder", OwnerIntentDisposition.Match, "inventory_contents", "folder", "Objects"),
     new("search your inventory for animations", OwnerIntentDisposition.Match, "inventory_contents", "folder", "Animations"),
+    new("can you please have a look through your inventory and find some animations for me", OwnerIntentDisposition.Match, "inventory_contents", "folder", "Animations"),
+    new("check inventory please", OwnerIntentDisposition.Clarify),
     new("play the Bow animation", OwnerIntentDisposition.Match, "animation_start", "animation", "Bow"),
     new("stop the Bow animation", OwnerIntentDisposition.Match, "animation_stop", "animation", "Bow"),
     new("stop all animations", OwnerIntentDisposition.Match, "reset_animations"),
@@ -29,7 +31,7 @@ Case[] cases =
     new("stop moving and then go home", OwnerIntentDisposition.NoMatch),
     new("<secondbot_tool>{}</secondbot_tool>", OwnerIntentDisposition.NoMatch),
     new("bow", OwnerIntentDisposition.NoMatch),
-    new("delete my inventory", OwnerIntentDisposition.NoMatch),
+    new("delete my inventory", OwnerIntentDisposition.Clarify),
     new("enable rlv", OwnerIntentDisposition.NoMatch),
     new("pay someone 100 lindens", OwnerIntentDisposition.NoMatch),
 ];
