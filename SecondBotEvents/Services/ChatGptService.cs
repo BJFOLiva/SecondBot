@@ -11,6 +11,7 @@ using System.Net.Http;
 using System.Text;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using SecondBotEvents.Services.Ai;
 using Swan;
 using StackExchange.Redis;
 using Betalgo.Ranul.OpenAI.Managers;
@@ -43,6 +44,8 @@ namespace SecondBotEvents.Services
         // Inventory reads can legitimately block for 60 seconds, and name resolution
         // may perform more than one command before the dashboard returns.
         protected static readonly HttpClient dashboardHttp = new() { Timeout = TimeSpan.FromSeconds(210) };
+        protected long providerBlockedUntil = 0;
+        protected string providerBlockReason = "";
         public override void Start(bool updateEnabled = false, bool setEnabledTo = false)
         {
             if (updateEnabled == true)
@@ -233,6 +236,7 @@ namespace SecondBotEvents.Services
         protected Dictionary<UUID, long> ChatHistoryLastAccessed = [];
         protected Dictionary<UUID, long> ChatRateLimiter = [];
         protected readonly ConcurrentDictionary<UUID, SemaphoreSlim> conversationLocks = new();
+        protected readonly ConcurrentDictionary<UUID, OwnerIntentContext> ownerIntentContexts = new();
 
         protected long lastUpkeep = 0;
         protected void upkeep()
@@ -496,6 +500,11 @@ namespace SecondBotEvents.Services
             bool progressSent = false;
             try
             {
+            if (avatarchat && IsConfiguredOwner(rateKey) && myConfig.GetDeterministicOwnerTools()
+                && await TryHandleDeterministicOwnerIntent(replyTo, conversation, rateKey, name, message))
+            {
+                return;
+            }
             bool allowedChat = true;
             lock(ChatRateLimiter)
             {
@@ -579,6 +588,13 @@ namespace SecondBotEvents.Services
                 LogFormater.Warn("No messages given");
                 return;
             }
+            long providerWait = providerBlockedUntil - SecondbotHelpers.UnixTimeNow();
+            if (providerWait > 0)
+            {
+                if (avatarchat)
+                    GetClient().Self.InstantMessage(replyTo, "AI conversation is rate-limited for about " + Math.Max(1, (int)Math.Ceiling(providerWait / 60.0)) + " more minute(s). Direct bot commands still work.");
+                return;
+            }
             try
             {
                 string replyMessage = "";
@@ -604,6 +620,7 @@ namespace SecondBotEvents.Services
                     });
                 }
                 ChatCompletionCreateResponse completionResult = null;
+                string initialProviderError = "";
                 ChatCompletionCreateRequest initialRequest = new()
                 {
                     Messages = messages,
@@ -613,6 +630,15 @@ namespace SecondBotEvents.Services
                 {
                     completionResult = await openAiService.ChatCompletion.CreateCompletion(initialRequest);
                     if (completionResult != null && completionResult.Successful) break;
+                    if (completionResult != null)
+                    {
+                        initialProviderError = DescribeProviderFailure(completionResult);
+                        if (IsProviderRateLimit(initialProviderError))
+                        {
+                            SetProviderCooldown(initialProviderError);
+                            break;
+                        }
+                    }
                     if (attempt < 2) await Task.Delay(TimeSpan.FromSeconds(2));
                 }
                 if (completionResult == null)
@@ -626,7 +652,7 @@ namespace SecondBotEvents.Services
                 }
                 else
                 {
-                    string providerError = DescribeProviderFailure(completionResult);
+                    string providerError = initialProviderError != "" ? initialProviderError : DescribeProviderFailure(completionResult);
                     if (myConfig.GetShowDebug()) LogFormater.Warn("Initial AI completion failed: " + providerError);
                     GetClient().Self.InstantMessage(replyTo, "The AI provider rejected that request: " + providerError);
                     return;
@@ -733,6 +759,52 @@ namespace SecondBotEvents.Services
             }
         }
 
+        protected async Task<bool> TryHandleDeterministicOwnerIntent(UUID replyTo, UUID conversation, UUID actor, string name, string message)
+        {
+            OwnerIntentContext context = ownerIntentContexts.GetOrAdd(conversation, _ => new OwnerIntentContext());
+            OwnerIntentResult intent = OwnerIntentRouter.Route(message, context);
+            if (intent.Disposition == OwnerIntentDisposition.NoMatch) return false;
+
+            if (intent.Disposition == OwnerIntentDisposition.Clarify)
+            {
+                GetClient().Self.InstantMessage(replyTo, intent.Clarification);
+                return true;
+            }
+            if (!string.IsNullOrWhiteSpace(intent.LocalReply))
+            {
+                string localReply = intent.LocalReply.Replace("{owner_uuid}", actor.ToString(), StringComparison.Ordinal);
+                GetClient().Self.InstantMessage(replyTo, localReply);
+                await RememberRecentExchange(actor, name, message, localReply);
+                return true;
+            }
+
+            string progress = intent.ToolKey.StartsWith("inventory_", StringComparison.OrdinalIgnoreCase)
+                || intent.ToolKey.StartsWith("animation_", StringComparison.OrdinalIgnoreCase)
+                ? "I'm checking my inventory now. I'll message you again when I have the result."
+                : "I'm carrying that out now. I'll message you again with the result.";
+            GetClient().Self.InstantMessage(replyTo, progress);
+
+            using JsonDocument argumentDocument = JsonDocument.Parse(JsonSerializer.Serialize(intent.Arguments));
+            string toolResult = await ExecuteOwnerTool(actor, conversation, intent.ToolKey, argumentDocument.RootElement.Clone());
+            string finalReply;
+            if (TryGetToolError(toolResult, out string error))
+                finalReply = "I couldn't complete that bot action: " + error;
+            else
+                finalReply = BuildToolFallback(intent.ToolKey, toolResult);
+
+            if (intent.ToolKey == "inventory_contents" && intent.Arguments.TryGetValue("folder", out object folder))
+                context = context with { LastInventoryFolder = Convert.ToString(folder) ?? "" };
+            if (intent.ToolKey == "animation_start" && intent.Arguments.TryGetValue("animation", out object animation))
+                context = context with { LastAnimation = Convert.ToString(animation) ?? "" };
+            if (intent.ToolKey == "animation_stop" || intent.ToolKey == "reset_animations")
+                context = context with { LastAnimation = "" };
+            ownerIntentContexts[conversation] = context;
+
+            GetClient().Self.InstantMessage(replyTo, finalReply);
+            await RememberRecentExchange(actor, name, message, finalReply);
+            return true;
+        }
+
         protected bool IsConfiguredOwner(UUID actor)
         {
             return UUID.TryParse(myConfig.GetOwnerUUID(), out UUID owner) && owner != UUID.Zero && actor == owner;
@@ -788,6 +860,24 @@ namespace SecondBotEvents.Services
             return "unknown provider error";
         }
 
+        protected static bool IsProviderRateLimit(string error) =>
+            error.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("rate_limit_exceeded", StringComparison.OrdinalIgnoreCase);
+
+        protected void SetProviderCooldown(string error)
+        {
+            double seconds = 60;
+            Match retry = Regex.Match(error, @"try again in\s+(?:(?<m>\d+)m)?(?<s>\d+(?:\.\d+)?)s", RegexOptions.IgnoreCase);
+            if (retry.Success)
+            {
+                double minutes = retry.Groups["m"].Success ? double.Parse(retry.Groups["m"].Value) : 0;
+                double remaining = retry.Groups["s"].Success ? double.Parse(retry.Groups["s"].Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
+                seconds = minutes * 60 + remaining;
+            }
+            providerBlockedUntil = SecondbotHelpers.UnixTimeNow() + Math.Max(30, (long)Math.Ceiling(seconds));
+            providerBlockReason = error;
+        }
+
         protected static string FindProviderError(JsonElement element)
         {
             if (element.ValueKind == JsonValueKind.Object)
@@ -832,12 +922,60 @@ namespace SecondBotEvents.Services
                     return "I found " + names.Count + " item" + (names.Count == 1 ? "" : "s") + ": " + shown
                         + (names.Count > 60 ? ". There are " + (names.Count - 60) + " more." : ".");
                 }
+                if (root.TryGetProperty("result", out JsonElement resultObject)
+                    && resultObject.TryGetProperty("reply", out JsonElement reply))
+                {
+                    if (reply.ValueKind == JsonValueKind.String)
+                        return reply.GetString() ?? "The command completed successfully.";
+                    if (reply.ValueKind == JsonValueKind.Array)
+                    {
+                        List<string> labels = [];
+                        CollectResultLabels(reply, labels, 60);
+                        if (labels.Count > 0)
+                            return "I found " + labels.Count + " result" + (labels.Count == 1 ? "" : "s") + ": " + string.Join(", ", labels) + ".";
+                    }
+                    if (reply.ValueKind == JsonValueKind.Object)
+                    {
+                        List<string> values = [];
+                        foreach (JsonProperty property in reply.EnumerateObject())
+                        {
+                            if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+                                values.Add(property.Name + ": " + property.Value.ToString());
+                        }
+                        if (values.Count > 0) return string.Join(", ", values) + ".";
+                    }
+                }
                 string compact = result.Length > 900 ? result[..900] + "…" : result;
                 return "The bot action completed successfully. Result: " + compact;
             }
             catch (JsonException)
             {
                 return "The bot action completed, but its result could not be formatted: " + (result.Length > 500 ? result[..500] + "…" : result);
+            }
+        }
+
+        protected static void CollectResultLabels(JsonElement element, List<string> labels, int limit)
+        {
+            if (labels.Count >= limit) return;
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement child in element.EnumerateArray()) CollectResultLabels(child, labels, limit);
+                return;
+            }
+            if (element.ValueKind != JsonValueKind.Object) return;
+            foreach (string field in new[] { "name", "Name", "displayname", "DisplayName", "groupname", "GroupName" })
+            {
+                if (element.TryGetProperty(field, out JsonElement label) && label.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(label.GetString()))
+                {
+                    labels.Add(label.GetString());
+                    break;
+                }
+            }
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (property.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                    CollectResultLabels(property.Value, labels, limit);
             }
         }
 

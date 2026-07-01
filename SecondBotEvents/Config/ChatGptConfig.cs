@@ -43,12 +43,14 @@ namespace SecondBotEvents.Config
             settings.Add("DashboardBotId");
             settings.Add("DashboardSecret");
             settings.Add("OwnerUUID");
+            settings.Add("DeterministicOwnerTools");
         }
 
         public string GetDashboardUrl() { return ReadSettingAsString("DashboardUrl", ""); }
         public int GetDashboardBotId() { return ReadSettingAsInt("DashboardBotId", 0); }
         public string GetDashboardSecret() { return ReadSettingAsString("DashboardSecret", ""); }
         public string GetOwnerUUID() { return ReadSettingAsString("OwnerUUID", ""); }
+        public bool GetDeterministicOwnerTools() { return ReadSettingAsBool("DeterministicOwnerTools", true); }
 
         public bool GetFakeTypeDelay()
         {
