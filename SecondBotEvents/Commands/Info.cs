@@ -85,6 +85,41 @@ namespace SecondBotEvents.Commands
             return BasicReply(JsonSerializer.Serialize(reply, JsonOptions.UnsafeRelaxed));
         }
 
+        [About("Lists root objects visible near the bot, ordered by distance")]
+        [ArgHints("range", "maximum distance in metres (1-96)", "FLOAT", "32")]
+        [ReturnHints("array of nearby objects with uuid, name, owner, position and distance")]
+        [ReturnHintsFailure("Error not in a sim")]
+        [CmdTypeGet()]
+        public object NearbyObjects(string range)
+        {
+            if (GetClient().Network.CurrentSim == null) return Failure("Error not in a sim");
+            if (!float.TryParse(range, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float maxRange))
+                return Failure("Invalid range", [range]);
+            maxRange = Math.Clamp(maxRange, 1f, 96f);
+            Vector3 botPosition = GetClient().Self.SimPosition;
+            List<NearbyObjectInfo> reply = [];
+            foreach (Primitive primitive in GetClient().Network.CurrentSim.ObjectsPrimitives.Values.ToList())
+            {
+                if (primitive == null || primitive.ParentID != 0 || primitive.ID == UUID.Zero) continue;
+                float distance = Vector3.Distance(botPosition, primitive.Position);
+                if (distance > maxRange) continue;
+                string name = primitive.Properties?.Name;
+                if (string.IsNullOrWhiteSpace(name) && primitive.NameValues != null && primitive.NameValues.Count() > 0)
+                    name = primitive.NameValues[0].Value?.ToString();
+                if (string.IsNullOrWhiteSpace(name)) name = "(unnamed object)";
+                reply.Add(new NearbyObjectInfo
+                {
+                    uuid = primitive.ID.ToString(),
+                    name = name,
+                    owner = primitive.OwnerID.ToString(),
+                    position = primitive.Position.ToString(),
+                    distance = Math.Round(distance, 2)
+                });
+            }
+            return BasicReply(JsonSerializer.Serialize(reply.OrderBy(o => o.distance), JsonOptions.UnsafeRelaxed), [range]);
+        }
+
         [About("Fetchs the current bot")]
         [ReturnHints("The build ID of the bot")]
         [CmdTypeGet()]
@@ -160,6 +195,15 @@ namespace SecondBotEvents.Commands
             };
             return BasicReply(JsonSerializer.Serialize(pos, JsonOptions.UnsafeRelaxed));
         }
+    }
+
+    public class NearbyObjectInfo
+    {
+        public string uuid { get; set; }
+        public string name { get; set; }
+        public string owner { get; set; }
+        public string position { get; set; }
+        public double distance { get; set; }
     }
 
     public class SculptysInfo
