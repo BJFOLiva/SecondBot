@@ -40,7 +40,9 @@ namespace SecondBotEvents.Services
 
         protected ConnectionMultiplexer redis = null;
         protected IDatabase redisDb = null;
-        protected static readonly HttpClient dashboardHttp = new() { Timeout = TimeSpan.FromSeconds(12) };
+        // Inventory reads can legitimately block for 60 seconds, and name resolution
+        // may perform more than one command before the dashboard returns.
+        protected static readonly HttpClient dashboardHttp = new() { Timeout = TimeSpan.FromSeconds(210) };
         public override void Start(bool updateEnabled = false, bool setEnabledTo = false)
         {
             if (updateEnabled == true)
@@ -551,7 +553,7 @@ namespace SecondBotEvents.Services
                     "<secondbot_tool>{\"tool_key\":\"command\",\"args\":{}}</secondbot_tool>. Available commands: " +
                     "hello, bot_name, version, sim_name, parcel_name, region_type, position, unix_time, nearby, nearby_details, " +
                     "friends_list, groups, parcel_id, parcel_uuid, parcel_size, parcel_traffic, parcel_description, parcel_flags, " +
-                    "stand, autopilot_stop, reset_animations, animation_start, animation_stop, inventory_folders, inventory_contents, request_teleport. " +
+                    "stand, autopilot_stop, reset_animations, animation_start, animation_stop, inventory_folders, inventory_contents, request_teleport, dialog_response. " +
                     "Use request_teleport with empty args when the owner asks you to come to them. " +
                     "inventory_contents requires args.folder set to a folder name (e.g. \"Animations\") or UUID; the dashboard resolves names automatically. " +
                     "animation_start and animation_stop accept args.animation as the animation name (e.g. \"Kneel\") or UUID; the dashboard resolves names from the Animations folder automatically. " +
@@ -616,6 +618,14 @@ namespace SecondBotEvents.Services
                 int toolDepth = 0;
                 while (avatarchat && IsConfiguredOwner(rateKey) && toolDepth < 3 && TryParseToolRequest(replyMessage, out string toolKey, out JsonElement toolArgs))
                 {
+                    if (toolDepth == 0)
+                    {
+                        string progress = toolKey.StartsWith("inventory_", StringComparison.OrdinalIgnoreCase)
+                            || toolKey.StartsWith("animation_", StringComparison.OrdinalIgnoreCase)
+                            ? "I'm checking my inventory now. I'll message you again when I have the result."
+                            : "I'm carrying that out now. I'll message you again with the result.";
+                        GetClient().Self.InstantMessage(replyTo, progress);
+                    }
                     string toolResult = await ExecuteOwnerTool(rateKey, conversation, toolKey, toolArgs);
                     messages.Add(ChatMessage.FromAssistant(replyMessage));
                     toolDepth++;
