@@ -81,7 +81,12 @@ namespace SecondBotEvents.Commands
             {
                 return Failure("bad dialog id", [dialogid, buttontext]);
             }
-            return BasicReply(master.DialogService.DialogAction(dialogidnum, buttontext));
+            string result = master.DialogService.DialogAction(dialogidnum, buttontext);
+            if (result != "action")
+            {
+                return Failure(result, [dialogid, buttontext]);
+            }
+            return BasicReply(result, [dialogid, buttontext]);
         }
 
     }

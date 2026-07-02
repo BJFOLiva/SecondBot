@@ -141,7 +141,7 @@ namespace SecondBotEvents.Services
                     List<int> removeids = [];
                     foreach(KeyValuePair<int,long> a in DialogWindowsExpire)
                     {
-                        if(a.Value > unixtime)
+                        if(a.Value <= unixtime)
                         {
                             removeids.Add(a.Key);
                         }
