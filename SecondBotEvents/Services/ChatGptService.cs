@@ -643,16 +643,20 @@ namespace SecondBotEvents.Services
                 }
                 if (completionResult == null)
                 {
+                    await ReportProviderTelemetry("provider_failure", "The provider returned no response.");
                     if (avatarchat) GetClient().Self.InstantMessage(replyTo, "The AI provider returned no response. Please try again.");
                     return;
                 }
                 if (completionResult.Successful)
                 {
+                    await ReportProviderTelemetry("provider_success");
                     replyMessage = completionResult.Choices.First().Message.Content;
                 }
                 else
                 {
                     string providerError = initialProviderError != "" ? initialProviderError : DescribeProviderFailure(completionResult);
+                    await ReportProviderTelemetry(IsProviderRateLimit(providerError) ? "provider_rate_limit" : "provider_failure", providerError,
+                        IsProviderRateLimit(providerError) ? providerBlockedUntil : 0);
                     if (myConfig.GetShowDebug()) LogFormater.Warn("Initial AI completion failed: " + providerError);
                     GetClient().Self.InstantMessage(replyTo, "The AI provider rejected that request: " + providerError);
                     return;
@@ -689,6 +693,7 @@ namespace SecondBotEvents.Services
                     }
                     else
                     {
+                        await ReportProviderTelemetry("provider_failure", "AI follow-up failed after tool " + toolKey);
                         if (myConfig.GetShowDebug()) LogFormater.Warn("AI follow-up failed after tool " + toolKey);
                         replyMessage = BuildToolFallback(toolKey, toolResult);
                     }
@@ -747,6 +752,7 @@ namespace SecondBotEvents.Services
             }
             catch (Exception ex)
             {
+                await ReportProviderTelemetry("provider_failure", ex.Message);
                 if (myConfig.GetShowDebug() == true)
                 {
                     LogFormater.Warn("An error occurred:" + ex.Message);
@@ -1076,6 +1082,25 @@ namespace SecondBotEvents.Services
                 throw new InvalidOperationException(detail);
             }
             return JsonDocument.Parse(responseBody);
+        }
+
+        protected async Task ReportProviderTelemetry(string eventType, string message = "", long retryAt = 0)
+        {
+            try
+            {
+                using JsonDocument ignored = await PostDashboard("/api/bot-ai/telemetry", new
+                {
+                    @event = eventType,
+                    provider = myConfig.GetProvider(),
+                    model = myConfig.GetUseModel(),
+                    message = message.Length > 500 ? message[..500] : message,
+                    retry_at = retryAt > 0 ? retryAt : (long?)null
+                });
+            }
+            catch (Exception ex)
+            {
+                if (myConfig.GetShowDebug()) LogFormater.Warn("Dashboard AI telemetry failed: " + ex.Message);
+            }
         }
 
         private static readonly Random _random = new();
