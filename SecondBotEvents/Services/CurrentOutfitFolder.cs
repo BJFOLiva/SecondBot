@@ -97,7 +97,6 @@ namespace SecondBotEvents.Services
             GetClient().Inventory.FolderUpdated += Inventory_FolderUpdated;
             GetClient().Inventory.ItemReceived += Inventory_ItemReceived;
             GetClient().Appearance.AppearanceSet += Appearance_AppearanceSet;
-            GetClient().Objects.KillObject += Objects_KillObject;
         }
 
         private void UnregisterClientEvents()
@@ -106,7 +105,6 @@ namespace SecondBotEvents.Services
             GetClient().Inventory.FolderUpdated -= Inventory_FolderUpdated;
             GetClient().Inventory.ItemReceived -= Inventory_ItemReceived;
             GetClient().Appearance.AppearanceSet -= Appearance_AppearanceSet;
-            GetClient().Objects.KillObject -= Objects_KillObject;
             lock (Content) Content.Clear();
             InitiCOF = false;
             AppearanceSent = false;
@@ -186,20 +184,6 @@ namespace SecondBotEvents.Services
                             GetClient().Inventory.RequestFetchInventory(itm, GetClient().Self.AgentID);
                         }
                     }
-                }
-            }
-        }
-
-        private void Objects_KillObject(object sender, KillObjectEventArgs e)
-        {
-            if (GetClient().Network.CurrentSim != e.Simulator) return;
-
-            if (GetClient().Network.CurrentSim.ObjectsPrimitives.TryGetValue(e.ObjectLocalID, out Primitive prim))
-            {
-                UUID invItem = GetAttachmentItem(prim);
-                if (invItem != UUID.Zero)
-                {
-                    RemoveLink(invItem);
                 }
             }
         }

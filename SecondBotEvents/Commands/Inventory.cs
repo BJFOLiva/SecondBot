@@ -485,7 +485,11 @@ namespace SecondBotEvents.Commands
                 return Failure("invaild item uuid", [item]);
             }
             InventoryItem realitem = HelperInventory.getItemByInventoryUUID(GetClient(), itemuuid);
-            GetClient().Appearance.AddAttachments([realitem], false, false);
+            if (realitem == null || CurrentOutfitFolder.CanBeWorn(realitem) == false)
+            {
+                return Failure("Unable to find wearable inventory item", [item]);
+            }
+            master.CurrentOutfitFolder.AddToOutfit(realitem, false);
             return BasicReply("Ok", [item]);
         }
 
