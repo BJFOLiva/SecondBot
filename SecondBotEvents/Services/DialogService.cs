@@ -214,6 +214,7 @@ namespace SecondBotEvents.Services
                     request.AddParameter("method", "Dialog");
                     request.AddParameter("action", "Relay");
                     request.AddParameter("botname", GetClient().Self.Name);
+                    request.AddParameter("botuuid", GetClient().Self.AgentID.ToString());
                     request.AddParameter("event", eventMessage);
                     request.AddHeader("content-type", "application/x-www-form-urlencoded");
                     client.ExecutePostAsync(request);
