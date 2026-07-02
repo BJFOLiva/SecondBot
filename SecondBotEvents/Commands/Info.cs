@@ -98,21 +98,38 @@ namespace SecondBotEvents.Commands
                 return Failure("Invalid range", [range]);
             maxRange = Math.Clamp(maxRange, 1f, 96f);
             Vector3 botPosition = GetClient().Self.SimPosition;
-            List<NearbyObjectInfo> reply = [];
+            List<Primitive> candidates = [];
             foreach (Primitive primitive in GetClient().Network.CurrentSim.ObjectsPrimitives.Values.ToList())
             {
                 if (primitive == null || primitive.ParentID != 0 || primitive.ID == UUID.Zero) continue;
                 float distance = Vector3.Distance(botPosition, primitive.Position);
                 if (distance > maxRange) continue;
+                candidates.Add(primitive);
+            }
+
+            // Object update packets contain geometry but normally omit name/owner.
+            // Selecting and immediately deselecting roots requests ObjectProperties.
+            uint[] unresolved = candidates.Where(p => string.IsNullOrWhiteSpace(p.Properties?.Name))
+                .OrderBy(p => Vector3.Distance(botPosition, p.Position))
+                .Take(120).Select(p => p.LocalID).ToArray();
+            foreach (uint[] batch in unresolved.Chunk(40))
+                GetClient().Objects.SelectObjects(GetClient().Network.CurrentSim, batch, true);
+            if (unresolved.Length > 0) System.Threading.Thread.Sleep(1200);
+
+            List<NearbyObjectInfo> reply = [];
+            foreach (Primitive primitive in candidates)
+            {
+                float distance = Vector3.Distance(botPosition, primitive.Position);
                 string name = primitive.Properties?.Name;
                 if (string.IsNullOrWhiteSpace(name) && primitive.NameValues != null && primitive.NameValues.Count() > 0)
                     name = primitive.NameValues[0].Value?.ToString();
                 if (string.IsNullOrWhiteSpace(name)) name = "(unnamed object)";
+                UUID owner = primitive.Properties?.OwnerID ?? primitive.OwnerID;
                 reply.Add(new NearbyObjectInfo
                 {
                     uuid = primitive.ID.ToString(),
                     name = name,
-                    owner = primitive.OwnerID.ToString(),
+                    owner = owner.ToString(),
                     position = primitive.Position.ToString(),
                     distance = Math.Round(distance, 2)
                 });
