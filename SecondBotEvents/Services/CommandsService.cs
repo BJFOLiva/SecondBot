@@ -231,7 +231,7 @@ namespace SecondBotEvents.Services
             string mode = "CHAT";
             UUID target_avatar = UUID.Zero;
             int target_channel = 0;
-            if (target.StartsWith("http://"))
+            if (target.StartsWith("http://") || target.StartsWith("https://"))
             {
                 mode = "HTTP";
             }
