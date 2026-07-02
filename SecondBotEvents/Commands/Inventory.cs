@@ -478,6 +478,41 @@ namespace SecondBotEvents.Commands
         [ReturnHintsFailure("invaild item uuid")]
         [ArgHints("item", "what item are we attaching", "UUID")]
         [CmdTypeDo()]
+        public object CurrentlyWorn()
+        {
+            List<Dictionary<string, string>> worn = [];
+            foreach (KeyValuePair<UUID, AttachmentPoint> attachment in GetClient().Appearance.GetAttachmentsByItemId())
+            {
+                string name = "(attachment)";
+                if (GetClient().Inventory.Store.Items.TryGetValue(attachment.Key, out InventoryNode node))
+                {
+                    name = node.Data.Name;
+                }
+                worn.Add(new Dictionary<string, string>
+                {
+                    { "uuid", attachment.Key.ToString() }, { "name", name },
+                    { "kind", "attachment" }, { "slot", attachment.Value.ToString() }
+                });
+            }
+            foreach (AppearanceManager.WearableData wearable in GetClient().Appearance.GetWearables())
+            {
+                string name = wearable.Asset?.Name ?? "(wearable)";
+                if (GetClient().Inventory.Store.Items.TryGetValue(wearable.ItemID, out InventoryNode node))
+                {
+                    name = node.Data.Name;
+                }
+                worn.Add(new Dictionary<string, string>
+                {
+                    { "uuid", wearable.ItemID.ToString() }, { "name", name },
+                    { "kind", "wearable" }, { "slot", wearable.WearableType.ToString() }
+                });
+            }
+            return BasicReply(JsonSerializer.Serialize(worn, JsonOptions.UnsafeRelaxed));
+        }
+
+        [About("Returns the bot's live worn attachments and wearables")]
+        [ReturnHints("JSON array of uuid, name, kind and slot")]
+        [CmdTypeGet()]
         public object Attach(string item)
         {
             if (UUID.TryParse(item, out UUID itemuuid) == false)
