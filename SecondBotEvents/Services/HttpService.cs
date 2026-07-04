@@ -103,6 +103,7 @@ namespace SecondBotEvents.Services
             Stop();
             running = true;
             master.BotClientNoticeEvent += BotClientRestart;
+            CreateWebServer();
         }
 
         public override void Stop()
@@ -127,6 +128,7 @@ namespace SecondBotEvents.Services
 
         private void CreateWebServer()
         {
+            if (HTTPendpoint != null) return;
             Swan.Logging.Logger.UnregisterLogger<ConsoleLogger>();
             HTTPendpoint = new WebServer(o => o
                 .WithUrlPrefix("http://*:80")
@@ -352,6 +354,21 @@ namespace SecondBotEvents.Services
 
     public class HttpWebBot(EventsSecondBot setmaster) : SecondbotWebApi(setmaster)
     {
+        [Route(HttpVerbs.Post, "/Authenticate")]
+        public string Authenticate([FormField] string username, [FormField] string password, [FormField] string signing, [FormField] string unixtime)
+        {
+            if (!master.transientLogin) return JsonSerializer.Serialize(new { status = false, error = "Transient login is disabled" });
+            if (!int.TryParse(unixtime, out int commandTime)) return JsonSerializer.Serialize(new { status = false, error = "Invalid timestamp" });
+            SignedCommand command = new(master.CommandsService, "http", "Authenticate", signing,
+                [username ?? string.Empty, password ?? string.Empty], commandTime, null, true,
+                master.CommandsService.myConfig.GetTimeWindowSecs(), master.CommandsService.myConfig.GetSharedSecret(), true);
+            if (!command.accepted) return JsonSerializer.Serialize(new { status = false, error = "Authentication request rejected" });
+            bool accepted = master.BotClient.LoginTransient(username, password);
+            password = null;
+            if (accepted) return JsonSerializer.Serialize(new { status = true, state = "authenticating" });
+            return JsonSerializer.Serialize(new { status = false, error = "Bot is already connected or credentials are invalid" });
+        }
+
         [About("Runs a command on the bot")]
         [ReturnHints("command reply")]
         [ReturnHintsFailure("Bad token signing")]

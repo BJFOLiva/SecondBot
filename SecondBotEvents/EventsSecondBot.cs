@@ -93,11 +93,13 @@ namespace SecondBotEvents
         }
 
         public bool fromEnv = false;
+        public bool transientLogin = false;
         public string fromFolder = "";
         protected bool exitNow = false;
         public EventsSecondBot(string[] args)
         {
-            if (SecondbotHelpers.NotEmpty(Environment.GetEnvironmentVariable("basic_Username")) == true)
+            transientLogin = string.Equals(Environment.GetEnvironmentVariable("SECONDBOT_TRANSIENT_LOGIN"), "true", StringComparison.OrdinalIgnoreCase);
+            if (transientLogin || SecondbotHelpers.NotEmpty(Environment.GetEnvironmentVariable("basic_Username")) == true)
             {
                 fromEnv = true;
             }

@@ -66,6 +66,13 @@ namespace SecondBotEvents.Services
                 AutoReset = false
             };
             AutoRestartLoginTimer.Elapsed += RestartTimer;
+            if (master.transientLogin)
+            {
+                ResetClient();
+                master.TriggerBotClientEvent(false, false);
+                LogFormater.Info("Client service [Awaiting transient credentials]");
+                return;
+            }
             Login();
         }
         public override void Stop()
@@ -223,6 +230,28 @@ namespace SecondBotEvents.Services
             }
             AutoRestartLoginTimer.Start();
             client.Network.BeginLogin(loginParams);
+        }
+
+        public bool LoginTransient(string username, string password)
+        {
+            if (!master.transientLogin || IsConnected() || string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
+            {
+                return false;
+            }
+            string[] bits = username.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            string firstName = bits.Length > 0 ? bits[0] : string.Empty;
+            string lastName = bits.Length > 1 ? bits[1] : "Resident";
+            if (string.IsNullOrWhiteSpace(firstName)) return false;
+
+            ResetClient();
+            goodticks = 0;
+            master.TriggerBotClientEvent(false, false);
+            LoginParams loginParams = new(client, firstName, lastName, password, "secondbot", master.GetVersion());
+            if (basicCfg.GetLoginURI() != "secondlife") loginParams.URI = basicCfg.GetLoginURI();
+            AutoRestartLoginTimer?.Start();
+            client.Network.BeginLogin(loginParams);
+            password = null;
+            return true;
         }
 
         protected int goodticks = 0;
